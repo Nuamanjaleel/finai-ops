@@ -6,25 +6,23 @@ import requests
 import os
 import json
 import re
-import redis
 
 # ----------------------------
-# Configuration
+# CONFIG
 # ----------------------------
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_URL = f"{OLLAMA_BASE_URL}/api/generate"
+GEN_MODE = os.getenv("GEN_MODE", "local")
+
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = "phi3:mini"
 
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-
 SIMILARITY_THRESHOLD = 1.5
-MAX_HISTORY = 6
-SESSION_TTL = 3600  # 1 hour
 
 # ----------------------------
-# Initialize Services
+# INIT
 # ----------------------------
 
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -32,10 +30,8 @@ embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma_client.get_or_create_collection(name="finai_docs")
 
-redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-
 # ----------------------------
-# Utility
+# PDF INGESTION
 # ----------------------------
 
 def extract_text_from_pdf(file_path: str):
@@ -55,40 +51,6 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50):
         start += chunk_size - overlap
     return chunks
 
-
-# ----------------------------
-# Redis Memory Layer
-# ----------------------------
-
-def get_session_key(session_id: str):
-    return f"session:{session_id}"
-
-
-def append_message(session_id: str, role: str, content: str):
-    key = get_session_key(session_id)
-    message = json.dumps({"role": role, "content": content})
-    redis_client.rpush(key, message)
-    redis_client.expire(key, SESSION_TTL)
-
-
-def get_conversation_history(session_id: str):
-    if not session_id:
-        return ""
-
-    key = get_session_key(session_id)
-    messages = redis_client.lrange(key, -MAX_HISTORY*2, -1)
-
-    history = ""
-    for msg in messages:
-        data = json.loads(msg)
-        history += f"{data['role'].capitalize()}: {data['content']}\n"
-
-    return history
-
-
-# ----------------------------
-# Ingestion
-# ----------------------------
 
 def ingest_document(file_path: str):
     document_id = str(uuid.uuid4())
@@ -121,12 +83,12 @@ def ingest_document(file_path: str):
         "chunks": len(chunks)
     }
 
-
 # ----------------------------
-# Retrieval
+# RETRIEVAL
 # ----------------------------
 
 def retrieve_context(question: str, top_k: int = 3):
+
     query_embedding = embedding_model.encode(question).tolist()
 
     results = collection.query(
@@ -134,9 +96,9 @@ def retrieve_context(question: str, top_k: int = 3):
         n_results=max(top_k * 5, 20)
     )
 
-    retrieved_docs = results["documents"][0]
+    docs = results["documents"][0]
     distances = results["distances"][0]
-    metadatas = results["metadatas"][0]
+    metas = results["metadatas"][0]
 
     week_number = None
     match = re.search(r"Week\s+(\d+)", question, re.IGNORECASE)
@@ -144,7 +106,7 @@ def retrieve_context(question: str, top_k: int = 3):
         week_number = int(match.group(1))
 
     filtered = []
-    for doc, dist, meta in zip(retrieved_docs, distances, metadatas):
+    for doc, dist, meta in zip(docs, distances, metas):
         if week_number:
             if meta.get("week") == week_number:
                 filtered.append((doc, dist, meta))
@@ -152,7 +114,7 @@ def retrieve_context(question: str, top_k: int = 3):
             filtered.append((doc, dist, meta))
 
     if not filtered:
-        filtered = list(zip(retrieved_docs, distances, metadatas))
+        filtered = list(zip(docs, distances, metas))
 
     filtered = filtered[:top_k]
 
@@ -166,9 +128,45 @@ def retrieve_context(question: str, top_k: int = 3):
     context = "\n\n".join(docs)
     return context, dists, metas
 
+# ----------------------------
+# INFERENCE
+# ----------------------------
+
+def generate_answer(prompt: str):
+
+    if GEN_MODE == "cloud":
+        headers = {
+            "Authorization": f"Bearer {HF_API_TOKEN}"
+        }
+
+        response = requests.post(
+            f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+            headers=headers,
+            json={"inputs": prompt},
+            timeout=60
+        )
+
+        output = response.json()
+
+        if isinstance(output, list):
+            return output[0]["generated_text"]
+
+        return str(output)
+
+    else:
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False
+            }
+        )
+
+        return response.json().get("response", "")
 
 # ----------------------------
-# Confidence Scoring
+# CONFIDENCE
 # ----------------------------
 
 def compute_confidence(answer: str, context: str, distances: list):
@@ -187,31 +185,25 @@ def compute_confidence(answer: str, context: str, distances: list):
     confidence = 0.6 * retrieval_conf + 0.4 * overlap_score
     return round(confidence, 3)
 
-
 # ----------------------------
-# Query
+# QUERY
 # ----------------------------
 
-def query_documents(question: str, top_k: int = 3, session_id: str = None):
+def query_documents(question: str, top_k: int = 3):
 
     context, distances, metas = retrieve_context(question, top_k)
 
     if context is None:
         return {
             "question": question,
-            "answer": "No sufficiently relevant context found.",
+            "answer": "No relevant context found.",
             "confidence": 0.0
         }
-
-    history = get_conversation_history(session_id)
 
     prompt = f"""
 You are an AI assistant.
 
 Answer using ONLY the context below.
-
-Previous Conversation:
-{history}
 
 Context:
 {context}
@@ -222,20 +214,7 @@ Question:
 Answer:
 """
 
-    response = requests.post(
-        OLLAMA_URL,
-        json={
-            "model": OLLAMA_MODEL,
-            "prompt": prompt,
-            "stream": False
-        }
-    )
-
-    answer = response.json().get("response", "")
-
-    if session_id:
-        append_message(session_id, "user", question)
-        append_message(session_id, "assistant", answer)
+    answer = generate_answer(prompt)
 
     confidence = compute_confidence(answer, context, distances)
 
@@ -245,4 +224,3 @@ Answer:
         "confidence": confidence,
         "sources": metas
     }
-
