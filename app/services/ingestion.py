@@ -25,7 +25,13 @@ SIMILARITY_THRESHOLD = 1.5
 # INIT
 # ----------------------------
 
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+embedding_model = None
+
+def get_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return embedding_model
 
 chroma_client = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma_client.get_or_create_collection(name="finai_docs")
@@ -64,7 +70,7 @@ def ingest_document(file_path: str):
         if week_match:
             current_week = int(week_match.group(1))
 
-        embedding = embedding_model.encode(chunk).tolist()
+        embedding = get_embedding_model().encode(chunk).tolist()
 
         collection.add(
             documents=[chunk],
@@ -89,7 +95,7 @@ def ingest_document(file_path: str):
 
 def retrieve_context(question: str, top_k: int = 3):
 
-    query_embedding = embedding_model.encode(question).tolist()
+    query_embedding = get_embedding_model().encode(question).tolist()
 
     results = collection.query(
         query_embeddings=[query_embedding],
