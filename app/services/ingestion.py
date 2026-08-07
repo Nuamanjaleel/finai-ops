@@ -33,12 +33,14 @@ def get_embedding_model():
         embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     return embedding_model
 
-CHROMA_PATH = "./chroma_db"
+if GEN_MODE == "local":
+    CHROMA_PATH = "./chroma_db"
+    if not os.path.exists(CHROMA_PATH):
+        os.makedirs(CHROMA_PATH)
+    chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+else:
+    chroma_client = chromadb.Client()
 
-if not os.path.exists(CHROMA_PATH):
-    os.makedirs(CHROMA_PATH)
-
-chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
 collection = chroma_client.get_or_create_collection(name="finai_docs")
 
 # ----------------------------
