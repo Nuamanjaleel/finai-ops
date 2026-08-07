@@ -1,0 +1,33 @@
+services:
+
+  backend:
+    build: .
+    container_name: finai-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+    depends_on:
+      - ollama
+      - redis
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+  ollama:
+    image: ollama/ollama
+    container_name: finai-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+  redis:
+    image: redis:7
+    container_name: finai-redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  ollama_data:
