@@ -1,4 +1,81 @@
-venv/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Environment variables (secrets)
 .env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Logs
+*.log
+logs/
+
+# Docker
+.dockerignore.bak
+
+# Vector DB (regenerable, shouldn't be in git)
+chroma_db/
+*.sqlite3
+
+# Temp files from uploads
+temp_*
+*.tmp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ML models (large binaries)
+*.bin
+*.pt
+*.pth
+*.h5
+
+# Node (if any frontend added later)
+node_modules/
+
+# Railway
+.railway/
