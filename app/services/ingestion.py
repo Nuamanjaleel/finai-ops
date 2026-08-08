@@ -4,7 +4,7 @@ import requests
 
 GEN_MODE = os.getenv("GEN_MODE", "cloud")
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
-HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
+HF_MODEL = os.getenv("HF_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
 
 
 def ingest_document(file_path: str):
@@ -19,7 +19,7 @@ def ingest_document(file_path: str):
 def diagnose_network():
     """Test DNS + connectivity from container."""
     results = {}
-    for host in ["google.com", "api-inference.huggingface.co", "router.huggingface.co", "huggingface.co"]:
+    for host in ["google.com", "router.huggingface.co", "huggingface.co"]:
         try:
             ip = socket.gethostbyname(host)
             results[host] = f"✅ Resolved to {ip}"
@@ -35,44 +35,44 @@ def query_documents(question: str, top_k: int = 3):
     if not HF_API_TOKEN:
         return {"question": question, "answer": "Error: HF_API_TOKEN not configured."}
 
-    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {HF_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
 
-    prompt = f"""You are an AI assistant.
+    # Use HF Inference Providers chat completions API (OpenAI-compatible)
+    url = "https://router.huggingface.co/v1/chat/completions"
 
-Answer the following question clearly and concisely:
+    payload = {
+        "model": HF_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an AI assistant specializing in financial risk and compliance. Answer clearly and concisely."
+            },
+            {
+                "role": "user",
+                "content": question
+            }
+        ],
+        "max_tokens": 512,
+        "temperature": 0.3,
+    }
 
-Question:
-{question}
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        data = response.json()
 
-Answer:
-"""
+        if "choices" in data:
+            answer = data["choices"][0]["message"]["content"]
+        else:
+            answer = f"Unexpected response: {data}"
 
-    # Try new HF router endpoint first, fall back to old
-    endpoints = [
-        f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}",
-        f"https://api-inference.huggingface.co/models/{HF_MODEL}",
-    ]
+        return {
+            "question": question,
+            "answer": answer,
+            "model": HF_MODEL,
+        }
 
-    last_error = None
-    for url in endpoints:
-        try:
-            response = requests.post(
-                url,
-                headers=headers,
-                json={"inputs": prompt},
-                timeout=60
-            )
-            output = response.json()
-
-            if isinstance(output, list):
-                answer = output[0].get("generated_text", str(output))
-            else:
-                answer = str(output)
-
-            return {"question": question, "answer": answer, "endpoint": url}
-
-        except Exception as e:
-            last_error = f"{url} -> {str(e)}"
-            continue
-
-    return {"question": question, "answer": f"All endpoints failed. Last error: {last_error}"}
+    except Exception as e:
+        return {"question": question, "answer": f"Error calling HF API: {str(e)}"}
