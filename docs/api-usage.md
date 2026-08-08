@@ -9,7 +9,7 @@ Complete examples for consuming the FinAI Ops API in various languages and tools
 ## Authentication
 
 All protected endpoints require the `X-API-Key` header.
-X-API-Key: zdMwJPjoTLFPpfRUcIY_W5s4GtEckkZ0xpAo0ZRP8R8
+X-API-Key: your_api_key_here
 
 
 Contact the maintainer to request an API key, or run your own instance and set the `API_KEY` environment variable.
