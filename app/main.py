@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
@@ -9,8 +9,13 @@ from app.services.ingestion import (
     query_documents,
     diagnose_network,
 )
+from app.middleware.auth import verify_api_key
 
-app = FastAPI()
+app = FastAPI(
+    title="FinAI Ops",
+    description="Enterprise-grade AI risk & compliance intelligence system",
+    version="1.0.0",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,23 +29,31 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# ----------------------------
+# Public Endpoints (no auth)
+# ----------------------------
+
+@app.get("/")
+def root():
+    return {"message": "FinAI Ops backend is running", "version": "1.0.0"}
+
+
 @app.get("/health")
 def health():
     return {"status": "healthy"}
 
 
-@app.get("/")
-def root():
-    return {"message": "FinAI Ops backend is running"}
-
-
 @app.get("/diagnose")
 def diagnose():
-    """Diagnostic endpoint to test outbound network + DNS."""
+    """Diagnostic endpoint for network/DNS testing."""
     return diagnose_network()
 
 
-@app.post("/upload")
+# ----------------------------
+# Protected Endpoints (require X-API-Key)
+# ----------------------------
+
+@app.post("/upload", dependencies=[Depends(verify_api_key)])
 async def upload_document(file: UploadFile = File(...)):
     file_location = f"temp_{file.filename}"
     with open(file_location, "wb") as f:
@@ -55,7 +68,7 @@ class QueryRequest(BaseModel):
     top_k: int = 3
 
 
-@app.post("/query")
+@app.post("/query", dependencies=[Depends(verify_api_key)])
 def query(request: QueryRequest):
     return query_documents(
         question=request.question,
