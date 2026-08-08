@@ -4,7 +4,9 @@ from pydantic import BaseModel
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import os
+import sys
 import logging
+import json
 
 from app.services.ingestion import (
     ingest_document,
@@ -13,6 +15,40 @@ from app.services.ingestion import (
 )
 from app.middleware.auth import verify_api_key
 from app.middleware.rate_limit import limiter
+from app.middleware.logging import StructuredLoggingMiddleware
+
+
+# ----------------------------
+# JSON Logging Setup
+# ----------------------------
+
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        # If message is already JSON, keep it. Otherwise wrap it.
+        try:
+            json.loads(record.getMessage())
+            return record.getMessage()
+        except (json.JSONDecodeError, ValueError):
+            return json.dumps({
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            })
+
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(JSONFormatter())
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.handlers = [handler]
+
+logger = logging.getLogger("finai-ops")
+
+
+# ----------------------------
+# App Setup
+# ----------------------------
 
 app = FastAPI(
     title="FinAI Ops",
@@ -23,6 +59,9 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Order matters: logging first (outermost), then CORS
+app.add_middleware(StructuredLoggingMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,9 +70,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
+# ----------------------------
+# Public Endpoints
+# ----------------------------
 
 @app.get("/")
 def root():
@@ -49,6 +89,10 @@ def health():
 def diagnose():
     return diagnose_network()
 
+
+# ----------------------------
+# Protected Endpoints
+# ----------------------------
 
 @app.post("/upload", dependencies=[Depends(verify_api_key)])
 @limiter.limit("5/minute")
