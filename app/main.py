@@ -1,6 +1,8 @@
-from fastapi import FastAPI, UploadFile, File, Depends
+from fastapi import FastAPI, UploadFile, File, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 import os
 import logging
 
@@ -10,12 +12,16 @@ from app.services.ingestion import (
     diagnose_network,
 )
 from app.middleware.auth import verify_api_key
+from app.middleware.rate_limit import limiter
 
 app = FastAPI(
     title="FinAI Ops",
     description="Enterprise-grade AI risk & compliance intelligence system",
     version="1.0.0",
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,10 +35,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# ----------------------------
-# Public Endpoints (no auth)
-# ----------------------------
-
 @app.get("/")
 def root():
     return {"message": "FinAI Ops backend is running", "version": "1.0.0"}
@@ -45,16 +47,12 @@ def health():
 
 @app.get("/diagnose")
 def diagnose():
-    """Diagnostic endpoint for network/DNS testing."""
     return diagnose_network()
 
 
-# ----------------------------
-# Protected Endpoints (require X-API-Key)
-# ----------------------------
-
 @app.post("/upload", dependencies=[Depends(verify_api_key)])
-async def upload_document(file: UploadFile = File(...)):
+@limiter.limit("5/minute")
+async def upload_document(request: Request, file: UploadFile = File(...)):
     file_location = f"temp_{file.filename}"
     with open(file_location, "wb") as f:
         f.write(await file.read())
@@ -69,8 +67,9 @@ class QueryRequest(BaseModel):
 
 
 @app.post("/query", dependencies=[Depends(verify_api_key)])
-def query(request: QueryRequest):
+@limiter.limit("10/minute")
+def query(request: Request, payload: QueryRequest):
     return query_documents(
-        question=request.question,
-        top_k=request.top_k
+        question=payload.question,
+        top_k=payload.top_k
     )
