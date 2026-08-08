@@ -13,6 +13,7 @@ from app.services.ingestion import (
     query_documents,
     diagnose_network,
 )
+from app.services.cache import query_cache
 from app.middleware.auth import verify_api_key
 from app.middleware.rate_limit import limiter
 from app.middleware.logging import StructuredLoggingMiddleware
@@ -24,7 +25,6 @@ from app.middleware.logging import StructuredLoggingMiddleware
 
 class JSONFormatter(logging.Formatter):
     def format(self, record):
-        # If message is already JSON, keep it. Otherwise wrap it.
         try:
             json.loads(record.getMessage())
             return record.getMessage()
@@ -59,7 +59,6 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Order matters: logging first (outermost), then CORS
 app.add_middleware(StructuredLoggingMiddleware)
 
 app.add_middleware(
@@ -88,6 +87,22 @@ def health():
 @app.get("/diagnose")
 def diagnose():
     return diagnose_network()
+
+
+@app.get("/cache/stats")
+def cache_stats():
+    """Returns cache size, hits, misses, and hit rate."""
+    return query_cache.stats()
+
+
+# ----------------------------
+# Admin Endpoint (protected)
+# ----------------------------
+
+@app.post("/cache/clear", dependencies=[Depends(verify_api_key)])
+def cache_clear():
+    query_cache.clear()
+    return {"status": "cache cleared"}
 
 
 # ----------------------------
