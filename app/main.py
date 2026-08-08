@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, Depends, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from slowapi import _rate_limit_exceeded_handler
@@ -71,6 +72,29 @@ app.add_middleware(
 
 
 # ----------------------------
+# Global Exception Handler
+# ----------------------------
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Catches any unhandled exception and returns a clean JSON error
+    with request_id for tracing. Never leaks stack traces to clients.
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.exception(f"Unhandled exception on {request.url.path} [request_id={request_id}]")
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_server_error",
+            "message": "An unexpected error occurred. Please contact support with the request_id.",
+            "request_id": request_id,
+        },
+    )
+
+
+# ----------------------------
 # Public Endpoints
 # ----------------------------
 
@@ -91,12 +115,11 @@ def diagnose():
 
 @app.get("/cache/stats")
 def cache_stats():
-    """Returns cache size, hits, misses, and hit rate."""
     return query_cache.stats()
 
 
 # ----------------------------
-# Admin Endpoint (protected)
+# Admin Endpoint
 # ----------------------------
 
 @app.post("/cache/clear", dependencies=[Depends(verify_api_key)])
