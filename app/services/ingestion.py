@@ -1,4 +1,5 @@
 import os
+import socket
 import requests
 
 GEN_MODE = os.getenv("GEN_MODE", "cloud")
@@ -7,33 +8,36 @@ HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"
 
 
 def ingest_document(file_path: str):
-    """
-    Cloud mode: ingestion disabled (no persistent vector store on free tier).
-    Local mode: full RAG pipeline (implemented separately).
-    """
     if GEN_MODE == "cloud":
         return {
             "status": "disabled",
-            "message": "Ingestion is disabled in cloud mode. Use local deployment for full RAG."
+            "message": "Ingestion is disabled in cloud mode."
         }
+    return {"status": "error", "message": "Local pipeline not wired."}
 
-    return {
-        "status": "error",
-        "message": "Local ingestion pipeline not wired in this build."
-    }
+
+def diagnose_network():
+    """Test DNS + connectivity from container."""
+    results = {}
+    for host in ["google.com", "api-inference.huggingface.co", "router.huggingface.co", "huggingface.co"]:
+        try:
+            ip = socket.gethostbyname(host)
+            results[host] = f"✅ Resolved to {ip}"
+        except Exception as e:
+            results[host] = f"❌ {str(e)}"
+    return results
 
 
 def query_documents(question: str, top_k: int = 3):
-    if GEN_MODE == "cloud":
-        if not HF_API_TOKEN:
-            return {
-                "question": question,
-                "answer": "Error: HF_API_TOKEN not configured."
-            }
+    if GEN_MODE != "cloud":
+        return {"question": question, "answer": "Local mode not supported."}
 
-        headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+    if not HF_API_TOKEN:
+        return {"question": question, "answer": "Error: HF_API_TOKEN not configured."}
 
-        prompt = f"""You are an AI assistant.
+    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+
+    prompt = f"""You are an AI assistant.
 
 Answer the following question clearly and concisely:
 
@@ -43,9 +47,17 @@ Question:
 Answer:
 """
 
+    # Try new HF router endpoint first, fall back to old
+    endpoints = [
+        f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}",
+        f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+    ]
+
+    last_error = None
+    for url in endpoints:
         try:
             response = requests.post(
-                f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+                url,
                 headers=headers,
                 json={"inputs": prompt},
                 timeout=60
@@ -57,12 +69,10 @@ Answer:
             else:
                 answer = str(output)
 
-            return {"question": question, "answer": answer}
+            return {"question": question, "answer": answer, "endpoint": url}
 
         except Exception as e:
-            return {"question": question, "answer": f"Error calling HF API: {str(e)}"}
+            last_error = f"{url} -> {str(e)}"
+            continue
 
-    return {
-        "question": question,
-        "answer": "Local mode not supported in cloud deployment."
-    }
+    return {"question": question, "answer": f"All endpoints failed. Last error: {last_error}"}
